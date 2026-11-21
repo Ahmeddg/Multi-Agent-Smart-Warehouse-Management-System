@@ -293,7 +293,7 @@ public final class SimulationEventBus {
     }
 
     public static void finishSimulationIfComplete() {
-        if (isWorkloadComplete() && !"COMPLETED".equals(status)) {
+        if (isRunning() && isWorkloadComplete()) {
             status = "COMPLETED";
             publishSystem("SIMULATION COMPLETED | Orders: " + totalOrders
                     + " | Successful: " + completedOrders

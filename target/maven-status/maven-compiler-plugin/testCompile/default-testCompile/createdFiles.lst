@@ -4,4 +4,5 @@ com\warehouse\ui\WarehouseVisualsTest.class
 com\warehouse\TrafficManagementTest.class
 com\warehouse\simulation\TaskQueueTest.class
 com\warehouse\simulation\SimulationEventBusTest.class
+com\warehouse\simulation\MultiOrderSimulationIntegrationTest.class
 com\warehouse\TaskAllocationTest.class
