@@ -12,6 +12,7 @@ import com.warehouse.environment.Position;
 public final class SimulationEventBus {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final List<Consumer<String>> listeners = new CopyOnWriteArrayList<>();
+    private static final List<String> eventLog = new CopyOnWriteArrayList<>();
     private static final Map<String, String> agentStates = new ConcurrentHashMap<>();
     private static final Map<String, String> robotStates = new ConcurrentHashMap<>();
     private static final Map<String, String> taskStates = new ConcurrentHashMap<>();
@@ -31,6 +32,8 @@ public final class SimulationEventBus {
     private static volatile int deadlocksResolved;
     private static volatile int negotiations;
     private static volatile int activeNegotiations;
+    private static volatile int maxConcurrentExecutingRobots;
+    private static volatile int configuredRobots;
     private static volatile long totalTaskMillis;
     private static volatile int completedTaskCount;
     private static volatile long startedAt;
@@ -50,6 +53,8 @@ public final class SimulationEventBus {
         deadlocksResolved = 0;
         negotiations = 0;
         activeNegotiations = 0;
+        maxConcurrentExecutingRobots = 0;
+        configuredRobots = 0;
         totalTaskMillis = 0;
         completedTaskCount = 0;
         startedAt = System.nanoTime();
@@ -60,10 +65,12 @@ public final class SimulationEventBus {
         robotStateSince.clear();
         robotBusyMillis.clear();
         taskStartedAt.clear();
+        eventLog.clear();
         status = "READY";
     }
 
     public static synchronized void configureWorkload(int robotCount, int orderCount) {
+        configuredRobots = robotCount;
         totalOrders = orderCount;
         startedAt = System.nanoTime();
     }
@@ -80,15 +87,22 @@ public final class SimulationEventBus {
     public static void publishLog(String sender, String receiver, String type, String content) {
         String entry = "[" + TIME.format(LocalTime.now()) + "] [" + sender + "] -> ["
                 + receiver + "]: " + type + " " + content;
+        eventLog.add(entry);
         for (Consumer<String> listener : listeners) {
             listener.accept(entry);
         }
     }
 
     public static void publishSystem(String message) {
+        String entry = "[" + TIME.format(LocalTime.now()) + "] [SYSTEM]: " + message;
+        eventLog.add(entry);
         for (Consumer<String> listener : listeners) {
-            listener.accept("[" + TIME.format(LocalTime.now()) + "] [SYSTEM]: " + message);
+            listener.accept(entry);
         }
+    }
+
+    public static List<String> getEventLog() {
+        return List.copyOf(eventLog);
     }
 
     public static void setStatus(String value) {
@@ -115,6 +129,12 @@ public final class SimulationEventBus {
         robotStateSince.put(robotId, now);
         robotStates.put(robotId, position + "|" + status + "|" + task + "|" + destination
                 + "|" + battery + "|" + completed + "|" + carrying + "|" + path);
+        int moving = (int) robotStates.values().stream().filter(value -> {
+            String robotStatus = value.split("\\|", -1)[1];
+            return "MOVING".equals(robotStatus) || "DELIVERING".equals(robotStatus)
+                    || "PICKING_UP".equals(robotStatus);
+        }).count();
+        maxConcurrentExecutingRobots = Math.max(maxConcurrentExecutingRobots, moving);
     }
 
     private static boolean isBusy(String state) {
@@ -176,22 +196,13 @@ public final class SimulationEventBus {
         pendingOrders = Math.max(0, pendingOrders - 1);
     }
 
-    public static synchronized void incrementPendingOrders() {
-        pendingOrders++;
-    }
-
     public static synchronized void incrementFailedOrders() {
         failedOrders++;
         pendingOrders = Math.max(0, pendingOrders - 1);
     }
 
-    public static synchronized void setActiveTasks(int value) {
-        activeTasks = value;
-    }
-
     public static synchronized void incrementFailedTasks() {
         failedTasks++;
-        activeTasks = Math.max(0, activeTasks - 1);
     }
 
     public static synchronized void incrementCollisions() {
@@ -261,6 +272,10 @@ public final class SimulationEventBus {
         return negotiations;
     }
 
+    public static int getMaxConcurrentExecutingRobots() {
+        return maxConcurrentExecutingRobots;
+    }
+
     public static double getAverageCompletionSeconds() {
         return completedTaskCount == 0 ? 0
                 : totalTaskMillis / 1000.0 / completedTaskCount;
@@ -276,14 +291,15 @@ public final class SimulationEventBus {
                 busy += (now - entry.getValue()) / 1_000_000L;
             }
         }
-        int robots = Math.max(1, robotStates.size());
+        int robots = Math.max(1, Math.max(configuredRobots, robotStates.size()));
         return Math.min(100.0, 100.0 * busy / (elapsed * robots));
     }
 
     public static boolean isWorkloadComplete() {
         if (totalOrders <= 0 || generatedOrders < totalOrders
                 || completedOrders + failedOrders < totalOrders
-                || pendingOrders != 0 || activeTasks != 0 || activeNegotiations != 0) {
+                || pendingOrders != 0 || getPendingTaskCount() != 0
+                || activeTasks != 0 || activeNegotiations != 0) {
             return false;
         }
         return robotStates.values().stream().allMatch(value -> {

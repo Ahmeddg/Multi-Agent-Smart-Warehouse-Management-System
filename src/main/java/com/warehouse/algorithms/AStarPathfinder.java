@@ -17,6 +17,19 @@ public class AStarPathfinder {
     public List<Position> findPath(WarehouseGrid grid,
                                    Position start,
                                    Position destination) {
+        return findPath(grid, start, destination, false);
+    }
+
+    public List<Position> findPathIgnoringRobots(WarehouseGrid grid,
+                                                 Position start,
+                                                 Position destination) {
+        return findPath(grid, start, destination, true);
+    }
+
+    private List<Position> findPath(WarehouseGrid grid,
+                                    Position start,
+                                    Position destination,
+                                    boolean ignoreRobots) {
         if (!grid.contains(start) || !grid.contains(destination)) {
             return Collections.emptyList();
         }
@@ -40,7 +53,7 @@ public class AStarPathfinder {
             }
             closed.add(current.position);
 
-            for (Position neighbor : neighbors(grid, current.position)) {
+            for (Position neighbor : neighbors(grid, current.position, ignoreRobots)) {
                 if (closed.contains(neighbor)) {
                     continue;
                 }
@@ -58,14 +71,17 @@ public class AStarPathfinder {
         return Collections.emptyList();
     }
 
-    private List<Position> neighbors(WarehouseGrid grid, Position position) {
+    private List<Position> neighbors(WarehouseGrid grid, Position position,
+                                     boolean ignoreRobots) {
         List<Position> neighbors = new ArrayList<>(4);
         int[][] directions = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (int[] direction : directions) {
             Position neighbor = new Position(
                     position.getX() + direction[0],
                     position.getY() + direction[1]);
-            if (grid.isTraversable(neighbor)) {
+            if (ignoreRobots
+                    ? grid.contains(neighbor) && grid.getCell(neighbor).isTraversable()
+                    : grid.isTraversable(neighbor)) {
                 neighbors.add(neighbor);
             }
         }

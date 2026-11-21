@@ -26,7 +26,7 @@ public class TaskAllocationAgent extends Agent {
             org.slf4j.LoggerFactory.getLogger(TaskAllocationAgent.class);
     private final TaskQueue tasks = new TaskQueue();
     private final Map<String, TaskProposal> proposals = new HashMap<>();
-    private final Set<String> responses = new HashSet<>();
+    private final Set<String> availableRobots = new HashSet<>();
     private final TaskScoringAlgorithm scoring = new TaskScoringAlgorithm();
     private final ObjectMapper mapper = new ObjectMapper();
     private String activeTaskId;
@@ -73,19 +73,24 @@ public class TaskAllocationAgent extends Agent {
                 && activeConversationId.equals(message.getConversationId())) {
             if (message.getPerformative() == ACLMessage.PROPOSE) {
                 recordProposal(message);
-            } else if (message.getPerformative() == ACLMessage.REFUSE) {
-                responses.add(message.getSender().getLocalName());
             }
         } else if (message.getPerformative() == ACLMessage.INFORM) {
             if ("TASK_STARTED".equals(type)) {
                 JsonNode body = read(message.getContent());
-                tasks.markInProgress(body.path("taskId").asText(),
-                        body.path("robotId").asText());
+                String robotId = body.path("robotId").asText();
+                availableRobots.remove(robotLocalName(robotId));
+                tasks.markInProgress(body.path("taskId").asText(), robotId);
             } else if ("TASK_COMPLETED".equals(type)) {
                 completeTask(message);
             } else if ("TASK_FAILED".equals(type)) {
                 failTask(message);
             } else if ("ROBOT_AVAILABLE".equals(type)) {
+                JsonNode body = read(message.getContent());
+                String robotId = body.path("robotId").asText();
+                if (!robotId.isBlank()
+                        && tasks.taskForRobot(robotId).isEmpty()) {
+                    availableRobots.add(message.getSender().getLocalName());
+                }
                 startNextNegotiation();
             }
         }
@@ -114,9 +119,15 @@ public class TaskAllocationAgent extends Agent {
         }
         DFAgentDescription[] robots =
                 AgentService.search(this, MessageProtocol.ROBOT_SERVICE);
-        if (robots.length == 0) {
-            failAnnouncedTask(task, "NO_ROBOT_AVAILABLE");
-            startNextNegotiation();
+        Set<String> selectedRobots = new HashSet<>();
+        for (DFAgentDescription robot : robots) {
+            String localName = robot.getName().getLocalName();
+            if (availableRobots.remove(localName)) {
+                selectedRobots.add(localName);
+            }
+        }
+        if (selectedRobots.isEmpty()) {
+            tasks.requeue(task.id());
             return;
         }
 
@@ -124,10 +135,12 @@ public class TaskAllocationAgent extends Agent {
         activeConversationId = task.id();
         activeTaskContent = task.content();
         proposals.clear();
-        responses.clear();
         SimulationEventBus.negotiationStarted();
         for (DFAgentDescription robot : robots) {
             String robotName = robot.getName().getLocalName();
+            if (!selectedRobots.contains(robotName)) {
+                continue;
+            }
             ACLMessage cfp = new ACLMessage(ACLMessage.CFP);
             cfp.addReceiver(robot.getName());
             cfp.setConversationId(activeConversationId);
@@ -158,7 +171,6 @@ public class TaskAllocationAgent extends Agent {
             proposal.setScore(scoring.calculate(proposal,
                     body.path("batteryLevel").asDouble(), true));
             proposals.put(robotId, proposal);
-            responses.add(message.getSender().getLocalName());
             SimulationEventBus.publishLog(robotId, "ALLOCATION-AGENT",
                     "PROPOSE", "COST=" + Math.round(proposal.getEstimatedTime()));
         } catch (Exception exception) {
@@ -212,6 +224,7 @@ public class TaskAllocationAgent extends Agent {
             scheduleQueuePump();
             return;
         }
+        availableRobots.remove(winner);
         for (DFAgentDescription robot : robots) {
             boolean accepted = robot.getName().getLocalName().equalsIgnoreCase(winner);
             String candidateId = "ROBOT-" + robot.getName().getLocalName()
@@ -250,6 +263,7 @@ public class TaskAllocationAgent extends Agent {
         if (!tasks.complete(taskId, robotId)) {
             return;
         }
+        availableRobots.remove(robotLocalName(robotId));
         SimulationEventBus.publishLog(robotId, "ALLOCATION-AGENT",
                 "INFORM", "TASK_COMPLETED " + taskId);
         startNextNegotiation();
@@ -263,11 +277,6 @@ public class TaskAllocationAgent extends Agent {
             notifyOrderFailed(taskId, body.path("reason").asText("ROBOT_FAILURE"));
         }
         startNextNegotiation();
-    }
-
-    private void failAnnouncedTask(TaskQueue.Entry task, String reason) {
-        tasks.fail(task.id(), null);
-        notifyOrderFailed(task.id(), reason);
     }
 
     private void notifyOrderFailed(String taskId, String reason) {
@@ -305,7 +314,6 @@ public class TaskAllocationAgent extends Agent {
         activeConversationId = null;
         activeTaskContent = null;
         proposals.clear();
-        responses.clear();
     }
 
     private void scheduleQueuePump() {

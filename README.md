@@ -28,6 +28,8 @@ mvn compile exec:java "-Dexec.mainClass=com.warehouse.ui.WarehouseApplication"
 ```
 
 The visualization provides scenario selection, robot and order controls,
-live agent and robot monitoring, communication logs, and a reset/pause/start
-control lifecycle. Scenario execution uses JADE agents, DF discovery, ACL
-contract-net negotiation, A* path planning, and traffic reservations.
+live agent and robot monitoring, communication logs, a synchronized warehouse
+legend, and a reset/pause/resume lifecycle. Orders are queued and negotiated
+continuously through JADE ACL messages; robots plan with A* and request traffic
+reservations as they move. Scenario defaults range from 3 robots / 5 orders
+for basic fulfillment to 6 robots / 20 orders for the stress test.

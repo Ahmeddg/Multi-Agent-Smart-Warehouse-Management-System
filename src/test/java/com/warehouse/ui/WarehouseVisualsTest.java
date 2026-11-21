@@ -37,5 +37,13 @@ class WarehouseVisualsTest {
                 .anyMatch(entry -> entry.label().startsWith("ROBOT-04")));
         assertEquals(3, WarehouseVisuals.legend(3).stream()
                 .filter(entry -> entry.label().startsWith("ROBOT-")).count());
+        assertTrue(WarehouseVisuals.legend(3).stream()
+                .anyMatch(entry -> entry.label().equals("Reserved cell")
+                        && entry.color().equals(Color.YELLOW)));
+        assertTrue(WarehouseVisuals.legend(3).stream()
+                .anyMatch(entry -> entry.label().equals("Destination")
+                        && entry.color().equals(Color.YELLOW)));
+        assertTrue(WarehouseVisuals.legend(3).stream()
+                .anyMatch(entry -> entry.label().equals("WAITING state")));
     }
 }

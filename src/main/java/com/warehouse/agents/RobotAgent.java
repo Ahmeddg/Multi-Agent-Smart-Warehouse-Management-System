@@ -32,6 +32,7 @@ public class RobotAgent extends Agent {
     private int speedPercent = 100;
     private String activeOrderId;
     private String activeTaskId;
+    private String negotiatingConversationId;
     private Position deliveryPosition;
     private boolean carrying;
     private boolean movementPending;
@@ -81,6 +82,7 @@ public class RobotAgent extends Agent {
                 updateEventState();
             }
         });
+        sendAvailable();
         updateEventState();
     }
 
@@ -90,8 +92,13 @@ public class RobotAgent extends Agent {
         } else if (message.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
             handleAccept(message);
         } else if (message.getPerformative() == ACLMessage.REJECT_PROPOSAL) {
-            state.setStatus(RobotStatus.IDLE);
-            sendAvailable();
+            if (state.getStatus() == RobotStatus.NEGOTIATING
+                    && message.getConversationId() != null
+                    && message.getConversationId().equals(negotiatingConversationId)) {
+                state.setStatus(RobotStatus.IDLE);
+                negotiatingConversationId = null;
+                sendAvailable();
+            }
         } else if (message.getPerformative() == ACLMessage.AGREE
                 && message.getContent() != null
                 && message.getContent().contains("MOVEMENT_GRANTED")) {
@@ -103,11 +110,13 @@ public class RobotAgent extends Agent {
             movementPending = false;
             state.setStatus(RobotStatus.WAITING);
             SimulationEventBus.incrementCollisions();
+            rerouteAroundOccupiedCells();
         } else if (message.getPerformative() == ACLMessage.INFORM
                 && message.getContent() != null
                 && message.getContent().contains("CELL_AVAILABLE")) {
             if (state.getStatus() == RobotStatus.WAITING) {
-                state.setStatus(RobotStatus.MOVING);
+                state.setStatus(carrying
+                        ? RobotStatus.DELIVERING : RobotStatus.MOVING);
             }
         }
     }
@@ -123,10 +132,12 @@ public class RobotAgent extends Agent {
                     task.path("delivery").path("y").asInt());
             List<Position> pickupPath = warehouse == null
                     ? List.of(state.getPosition(), pickup)
-                    : pathfinder.findPath(warehouse.getGrid(), state.getPosition(), pickup);
+                    : pathfinder.findPathIgnoringRobots(
+                    warehouse.getGrid(), state.getPosition(), pickup);
             List<Position> deliveryPath = warehouse == null
                     ? List.of(pickup, delivery)
-                    : pathfinder.findPath(warehouse.getGrid(), pickup, delivery);
+                    : pathfinder.findPathIgnoringRobots(
+                    warehouse.getGrid(), pickup, delivery);
             if (pickupPath.isEmpty() || deliveryPath.isEmpty()) {
                 refuseTask(message, "NO_ROUTE");
                 return;
@@ -140,6 +151,7 @@ public class RobotAgent extends Agent {
                 return;
             }
             state.setStatus(RobotStatus.NEGOTIATING);
+            negotiatingConversationId = message.getConversationId();
             ACLMessage proposal = message.createReply();
             proposal.setPerformative(ACLMessage.PROPOSE);
             proposal.setLanguage("JSON");
@@ -163,9 +175,18 @@ public class RobotAgent extends Agent {
         refuse.setContent("{\"type\":\"TASK_REFUSED\",\"robotId\":\""
                 + robotId + "\",\"reason\":\"" + reason + "\"}");
         send(refuse);
+        if (state.getStatus() == RobotStatus.IDLE) {
+            sendAvailable();
+        }
     }
 
     private void handleAccept(ACLMessage message) {
+        if (state.getStatus() != RobotStatus.NEGOTIATING || state.getTask() != null
+                || message.getConversationId() == null
+                || !message.getConversationId().equals(negotiatingConversationId)) {
+            return;
+        }
+        negotiatingConversationId = null;
         try {
             JsonNode task = mapper.readTree(message.getContent());
             String taskId = task.path("taskId").asText();
@@ -190,7 +211,7 @@ public class RobotAgent extends Agent {
                 return;
             }
             state.setDestination(pickup);
-            state.setStatus(RobotStatus.MOVING);
+            state.setStatus(carrying ? RobotStatus.DELIVERING : RobotStatus.MOVING);
             if (path.size() == 1) {
                 pickUpProduct();
             }
@@ -204,7 +225,7 @@ public class RobotAgent extends Agent {
                     + taskId + "\",\"robotId\":\"" + robotId + "\"}");
             send(started);
         } catch (Exception exception) {
-            state.setStatus(RobotStatus.IDLE);
+            failActiveTask("TASK_START_FAILED");
         }
     }
 
@@ -233,7 +254,7 @@ public class RobotAgent extends Agent {
         }
         Position next = path.get(pathIndex);
         if (!warehouse.getGrid().contains(next)
-                || !warehouse.getGrid().isTraversable(next)) {
+                || !warehouse.getGrid().getCell(next).isTraversable()) {
             state.setStatus(RobotStatus.BLOCKED);
             recalculatePath();
             return;
@@ -291,7 +312,7 @@ public class RobotAgent extends Agent {
 
     private boolean preparePath(Position destination) {
         path.clear();
-        path.addAll(pathfinder.findPath(warehouse.getGrid(),
+        path.addAll(pathfinder.findPathIgnoringRobots(warehouse.getGrid(),
                 state.getPosition(), destination));
         pathIndex = 1;
         return !path.isEmpty();
@@ -318,6 +339,21 @@ public class RobotAgent extends Agent {
             return;
         }
         state.setStatus(RobotStatus.MOVING);
+    }
+
+    private void rerouteAroundOccupiedCells() {
+        if (state.getDestination() == null || warehouse == null) {
+            return;
+        }
+        List<Position> detour = pathfinder.findPath(warehouse.getGrid(),
+                state.getPosition(), state.getDestination());
+        if (detour.isEmpty()) {
+            return;
+        }
+        path.clear();
+        path.addAll(detour);
+        pathIndex = 1;
+        state.setStatus(carrying ? RobotStatus.DELIVERING : RobotStatus.MOVING);
     }
 
     private void completeTask() {

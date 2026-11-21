@@ -16,6 +16,7 @@ class SimulationEventBusTest {
     @Test
     void completesOnlyAfterOrdersTasksAndRobotsAreIdle() {
         SimulationEventBus.configureWorkload(1, 1);
+        SimulationEventBus.setStatus("RUNNING");
         SimulationEventBus.orderGenerated();
         SimulationEventBus.setRobotState("ROBOT-01", "1,1", "IDLE",
                 "AVAILABLE", "-", "100%", 0, false, "-");
@@ -45,9 +46,15 @@ class SimulationEventBusTest {
         assertEquals("PAUSED", SimulationEventBus.getStatus());
         manager.resume();
         assertEquals("RUNNING", SimulationEventBus.getStatus());
+        SimulationEventBus.setRobotState("ROBOT-01", "1,1", "IDLE",
+                "AVAILABLE", "-", "100%", 0, false, "-");
+        SimulationEventBus.setTaskState("TASK-01", "PENDING");
+        SimulationEventBus.reserveCell(new com.warehouse.environment.Position(2, 2),
+                "robot-01");
         manager.reset();
         assertEquals("RESET", SimulationEventBus.getStatus());
         assertEquals(0, SimulationEventBus.getTaskStates().size());
         assertTrue(SimulationEventBus.getRobotStates().isEmpty());
+        assertTrue(SimulationEventBus.getCellReservations().isEmpty());
     }
 }
